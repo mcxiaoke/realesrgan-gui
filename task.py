@@ -187,7 +187,15 @@ class RESpawnTask(AbstractTask):
                         # self.outputCallback(line) # Suppress detailed log
                 finally:
                     current_process = None
+        
+        # Check if process was killed intentionally (exit code != 0 but user requested stop)
+        # We can detect this if the queue is cleared/empty in main, but we don't have access to main here.
+        # However, typically a force kill results in a specific exit code, or we can just catch it in taskRunner.
+        
         if p.returncode:
+            # If we are here, the process failed.
+            # If it was killed by the user, we might want to suppress the error or handle it.
+            # But here we just raise.
             raise subprocess.CalledProcessError(p.returncode, cmd)
             if i > 0 or inputPath == inputPathPreupscaled or self.removeInput:
                 os.remove(inputPath)
@@ -401,12 +409,20 @@ def taskRunner(
     while queue:
         try:
             pauseEvent.wait()
+            if not queue:
+                break
             ts = time.perf_counter()
-            queue.popleft().run()
+            task = queue.popleft()
+            task.run()
             te = time.perf_counter()
             outputCallback(f'Success elapsed time: ({round((te - ts) * 1000)}ms).\n')
             counter += 1
         except Exception as ex:
+            if not queue and isinstance(ex, subprocess.CalledProcessError):
+                 outputCallback("Task stopped by user.\n")
+                 completeCallback(False) # Treat as success (stopped) or ensure cleanup
+                 finallyCallback()
+                 return
             withError = True
             outputCallback(traceback.format_exc())
             failCallback(ex)

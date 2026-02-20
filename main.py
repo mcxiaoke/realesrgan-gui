@@ -327,13 +327,14 @@ class REGUIApp(ttk.Frame):
         )
         self.varstrLabelStartProcessing = tk.StringVar(
             value=i18n.getTranslatedString(
-                (
-                    "ContinueProcessing"
-                    if self.varboolProcessingPaused.get()
-                    else "PauseProcessing"
-                )
-                if self.varboolProcessing.get()
-                else "StartProcessing"
+                "StopProcessing" if self.varboolProcessing.get() else "StartProcessing"
+            )
+        )
+        self.varstrLabelPauseProcessing = tk.StringVar(
+            value=i18n.getTranslatedString(
+                "ContinueProcessing"
+                if self.varboolProcessingPaused.get()
+                else "PauseProcessing"
             )
         )
         self.varstrLabelDownsampleMode = tk.StringVar(
@@ -559,14 +560,26 @@ class REGUIApp(ttk.Frame):
             textvariable=self.varintResizeShortestSide,
         )
         self.spinResizeShortestSide.grid(row=5, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.frameProcessButtons = ttk.Frame(self.frameBasicConfigBottom)
+        self.frameProcessButtons.grid(row=0, column=1, padx=5, pady=5, sticky=tk.SE)
+
+        self.buttonPause = ttk.Button(
+            self.frameProcessButtons,
+            textvariable=self.varstrLabelPauseProcessing,
+            width=6,
+            command=self.buttonPause_click,
+            state="disabled",
+        )
+        self.buttonPause.pack(side=tk.LEFT, padx=5)
+
         self.buttonProcess = ttk.Button(
-            self.frameBasicConfigBottom,
+            self.frameProcessButtons,
             textvariable=self.varstrLabelStartProcessing,
             style="Accent.TButton",
             width=6,
             command=self.buttonProcess_click,
         )
-        self.buttonProcess.grid(row=0, column=1, padx=5, pady=5, sticky=tk.SE)
+        self.buttonProcess.pack(side=tk.LEFT, padx=5)
 
         self.frameAdvancedConfig = ttk.Frame(self.notebookConfig, padding=5)
         self.frameAdvancedConfig.grid(row=0, column=0, padx=5, pady=5, sticky=tk.NSEW)
@@ -913,35 +926,28 @@ class REGUIApp(ttk.Frame):
         self.comboTileSize.select_clear()
         self.varintTileSizeIndex.set(self.comboTileSize.current())
 
+    def buttonPause_click(self):
+        if not self.varboolProcessing.get():
+            return
+        if self.varboolProcessingPaused.get():
+            self.varboolProcessingPaused.set(False)
+            self.pauseEvent.set()
+            self.varstrLabelPauseProcessing.set(i18n.getTranslatedString("PauseProcessing"))
+        else:
+            self.varboolProcessingPaused.set(True)
+            self.pauseEvent.clear()
+            self.writeToOutput("Will pause after current task is completed.\n")
+            self.varstrLabelPauseProcessing.set(i18n.getTranslatedString("ContinueProcessing"))
+
     def buttonProcess_click(self):
         if self.varboolProcessing.get():
-            if self.varboolProcessingPaused.get():
-                self.varboolProcessingPaused.set(False)
-                self.pauseEvent.set()
-            else:
-                self.varboolProcessingPaused.set(True)
-                self.pauseEvent.clear()
-                self.writeToOutput("Will pause after current task is completed.\n")
-            self.buttonProcess.config(
-                style=(
-                    ""
-                    if self.varboolProcessing.get()
-                    and not self.varboolProcessingPaused.get()
-                    else "Accent.TButton"
-                )
-            )
-            self.varstrLabelStartProcessing.set(
-                i18n.getTranslatedString(
-                    (
-                        "ContinueProcessing"
-                        if self.varboolProcessingPaused.get()
-                        else "PauseProcessing"
-                    )
-                    if self.varboolProcessing.get()
-                    else "StartProcessing"
-                )
-            )
+            # Stop Processing
+            if hasattr(self, 'queue'): self.queue.clear()
+            task.kill_process()
+            self.pauseEvent.set()
+            self.writeToOutput("Stopping...\n")
             return
+
         try:
             # Check for empty paths
             if not self.varstrInputPath.get().strip():
@@ -966,6 +972,10 @@ class REGUIApp(ttk.Frame):
                 return messagebox.showwarning(
                     define.APP_TITLE, i18n.getTranslatedString("WarningResizeRatio")
                 )
+
+            self.textOutput.config(state=tk.NORMAL)
+            self.textOutput.delete(1.0, tk.END)
+            self.textOutput.config(state=tk.DISABLED)
 
             self.progressValue[0] = 0
             self.progressValue[1] = 0
@@ -998,6 +1008,9 @@ class REGUIApp(ttk.Frame):
                                 outputPath, f.removeprefix(inputPath + os.path.sep)
                             )
                             if os.path.splitext(f)[1].lower() == ".gif":
+                                if os.path.exists(g):
+                                    self.writeToOutput(f"Skipping {g}\n")
+                                    continue
                                 queue.append(
                                     task.SplitGIFTask(
                                         self.writeToOutput,
@@ -1019,6 +1032,9 @@ class REGUIApp(ttk.Frame):
                                 else:
                                     _ext = "." + _fmt.lower()
                                 g = os.path.splitext(g)[0] + _ext
+                                if os.path.exists(g):
+                                    self.writeToOutput(f"Skipping {g}\n")
+                                    continue
                                 queue.append(
                                     task.RESpawnTask(
                                         self.writeToOutput,
@@ -1063,6 +1079,9 @@ class REGUIApp(ttk.Frame):
                                 if self.varboolLossyMode.get() and _ext in (".jpg", ".jpeg", ".webp"):
                                     t = tempfile.mktemp(".webp")
                                     g = os.path.splitext(g)[0] + _ext
+                                    if os.path.exists(g):
+                                        self.writeToOutput(f"Skipping {g}\n")
+                                        continue
                                     queue.append(
                                         task.RESpawnTask(
                                             self.writeToOutput,
@@ -1083,6 +1102,9 @@ class REGUIApp(ttk.Frame):
                                     )
                                 else:
                                     g = os.path.splitext(g)[0] + _ext
+                                    if os.path.exists(g):
+                                        self.writeToOutput(f"Skipping {g}\n")
+                                        continue
                                     queue.append(
                                         task.RESpawnTask(
                                             self.writeToOutput,
@@ -1101,6 +1123,9 @@ class REGUIApp(ttk.Frame):
                                 else:
                                     _ext = "." + _fmt.lower()
                                 g = os.path.splitext(g)[0] + _ext
+                                if os.path.exists(g):
+                                    self.writeToOutput(f"Skipping {g}\n")
+                                    continue
                                 queue.append(
                                     task.RESpawnTask(
                                         self.writeToOutput,
@@ -1111,11 +1136,42 @@ class REGUIApp(ttk.Frame):
                                     )
                                 )
                             self.progressValue[2] += 1
-                    if not queue:
-                        return messagebox.showwarning(
-                            define.APP_TITLE,
-                            i18n.getTranslatedString("WarningEmptyFolder"),
-                        )
+                    if not queue and self.progressValue[2] == 0:
+                         # Only warn if truly empty (no tasks created AND no files processed/skipped check logic is complex here)
+                         # Actually if queue is empty, progressValue[2] IS 0.
+                         # But we want to distinguish "Empty folder" vs "All skipped"
+                         pass 
+                    if not queue and self.progressValue[2] == 0:
+                        # Scan again just to see if there were valid files that we skipped?
+                        # Or just rely on user knowing they skipped.
+                        # If queue is empty, we return.
+                        # If we skipped files, we already printed "Skipping..." to output.
+                        # But wait, output is cleared at strict start of processing loop? No, log is opened later.
+                        # Actually textOutput is cleared at line 1248.
+                        # So "Skipping..." messages are lost if we return here!
+                        
+                        # Let's just allow empty queue to proceed to "Completed" state if checking files found.
+                        # But original logic returns warning.
+                        
+                        # Let's count found files
+                        has_files = False
+                        for curDir, dirs, files in os.walk(inputPath):
+                            for f in files:
+                                if os.path.splitext(f)[1].lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff"}:
+                                    has_files = True
+                                    break
+                            if has_files: break
+                        
+                        if not has_files:
+                            return messagebox.showwarning(
+                                define.APP_TITLE,
+                                i18n.getTranslatedString("WarningEmptyFolder"),
+                            )
+                        else:
+                            # Files existed but were skipped.
+                            # We should probably show "Done" immediately.
+                            self.writeToOutput("All files skipped (already exist).\n")
+                            return
                 elif os.path.splitext(inputPath)[1].lower() in {
                     ".jpg",
                     ".jpeg",
@@ -1207,28 +1263,15 @@ class REGUIApp(ttk.Frame):
             self.varboolProcessing.set(True)
             self.varboolProcessingPaused.set(False)
             self.pauseEvent.set()
-            self.buttonProcess.config(
-                style=(
-                    ""
-                    if self.varboolProcessing.get()
-                    and not self.varboolProcessingPaused.get()
-                    else "Accent.TButton"
-                )
-            )
+            self.buttonProcess.config(style="")
             self.varstrLabelStartProcessing.set(
-                i18n.getTranslatedString(
-                    (
-                        "ContinueProcessing"
-                        if self.varboolProcessingPaused.get()
-                        else "PauseProcessing"
-                    )
-                    if self.varboolProcessing.get()
-                    else "StartProcessing"
-                )
+                i18n.getTranslatedString("StopProcessing")
             )
-            self.textOutput.config(state=tk.NORMAL)
-            self.textOutput.delete(1.0, tk.END)
-            self.textOutput.config(state=tk.DISABLED)
+            self.buttonPause.config(state="normal")
+            self.varstrLabelPauseProcessing.set(
+                i18n.getTranslatedString("PauseProcessing")
+            )
+            # self.textOutput.delete(1.0, tk.END) # Moved up
             
             self.log_configuration()
 
@@ -1269,12 +1312,17 @@ class REGUIApp(ttk.Frame):
                 self.vardoubleProgress.set(100)
 
             def failCallback(ex: Exception):
+                # If stopped manually, don't show error dialog
+                if not self.varboolProcessing.get() and hasattr(self, 'queue') and not self.queue:
+                    return
+
                 if sys.platform != "darwin":
                     notification.title = i18n.getTranslatedString("ToastFailedTitle")
                     notification.message = f"{type(ex).__name__}: {ex}"
                     notification.send(False)
 
             self.logFile = open(self.logPath, "w", encoding="utf-8")
+            self.queue = queue
             t = threading.Thread(
                 target=task.taskRunner,
                 args=(
@@ -1286,26 +1334,13 @@ class REGUIApp(ttk.Frame):
                     lambda: (
                         self.varboolProcessing.set(False),
                         self.pauseEvent.set(),
-                        self.buttonProcess.config(
-                            style=(
-                                ""
-                                if self.varboolProcessing.get()
-                                and not self.varboolProcessingPaused.get()
-                                else "Accent.TButton"
-                            )
-                        ),
+                        self.buttonPause.config(state="disabled"),
+                        self.buttonProcess.config(style="Accent.TButton"),
                         self.varstrLabelStartProcessing.set(
-                            i18n.getTranslatedString(
-                                (
-                                    "ContinueProcessing"
-                                    if self.varboolProcessingPaused.get()
-                                    else "PauseProcessing"
-                                )
-                                if self.varboolProcessing.get()
-                                else "StartProcessing"
-                            )
+                            i18n.getTranslatedString("StartProcessing")
                         ),
                         self.logFile.close(),
+                        setattr(self, 'logFile', None),
                         sys.platform == "win32"
                         and self.progressNativeTaskbar.SetProgressState(
                             int(self.master.wm_frame(), 16), 0
@@ -1316,6 +1351,8 @@ class REGUIApp(ttk.Frame):
                 daemon=True,
             )
             t.start()
+            self.buttonPause.config(state="normal")
+            self.buttonProcess.config(style="")  # Normal style for Stop button
         except Exception as ex:
             print(f"Error in buttonProcess_click: {ex}")
             messagebox.showerror(define.APP_TITLE, traceback.format_exc())
@@ -1326,7 +1363,7 @@ class REGUIApp(ttk.Frame):
         self.outputPathChanged = False
 
     def writeToOutput(self, s: str):
-        if self.logFile:
+        if self.logFile and not self.logFile.closed:
             self.logFile.write(s)
         self.textOutput.config(state=tk.NORMAL)
         self.textOutput.insert(tk.END, s)
@@ -1341,7 +1378,7 @@ class REGUIApp(ttk.Frame):
             (self.progressValue[0] + self.progressValue[1])
             / self.progressValue[2]
             * 100
-        )
+        ) if self.progressValue[2] > 0 else 0
         if progressFrom != progressTo:
 
             def anim():
