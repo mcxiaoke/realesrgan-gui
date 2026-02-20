@@ -967,6 +967,12 @@ class REGUIApp(ttk.Frame):
             )
             return
         try:
+            # Check for empty paths
+            if not self.varstrInputPath.get().strip():
+                return messagebox.showwarning(
+                    define.APP_TITLE, i18n.getTranslatedString("WarningInvalidPath")
+                )
+             
             inputPaths = tuple(p.strip() for p in self.varstrInputPath.get().split("|"))
             outputPaths = tuple(
                 p.strip() for p in self.varstrOutputPath.get().split("|")
