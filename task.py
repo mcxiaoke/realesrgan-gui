@@ -18,6 +18,28 @@ from PIL import ImageSequence
 import define
 import param
 
+current_process: subprocess.Popen = None
+
+def kill_process():
+    global current_process
+    proc = current_process # Capture reference
+    if proc:
+        try:
+            # Force kill immediately to be responsive on close
+            if os.name == 'nt':
+                # On Windows, terminate() is roughly equivalent to Kill, but let's be sure
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], 
+                               capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                proc.kill()
+        except Exception:
+            try:
+                proc.kill()
+            except:
+                pass
+        finally:
+            current_process = None
+
 class AbstractTask:
     def __init__(self, outputCallback: typing.Callable[[str], None]) -> None:
         self.outputCallback = outputCallback
@@ -141,6 +163,7 @@ class RESpawnTask(AbstractTask):
                     *(('-x', ) if self.config.useTTA else ()),
                 )
         self.outputCallback(f'Processing {os.path.basename(self.inputPath)}...\n')
+        global current_process
         with subprocess.Popen(
                 cmd,
                 stderr=subprocess.PIPE,
@@ -148,18 +171,22 @@ class RESpawnTask(AbstractTask):
                 encoding='utf-8' if os.path.splitext(os.path.split(define.RE_PATH)[1])[0] == 'upscayl-bin' else None,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
             ) as p:
-                for line in p.stderr:
-                    # 如果输入文件是有alpha通道的图片，但是输出扩展名又是JPG
-                    # Real-ESRGAN会强行给输出的文件名加上PNG的扩展名，导致后续处理找不到文件
-                    # 这里额外加了一个重命名为原来的输出文件名的操作
-                    # https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/blob/37026f49824c5cf84062e7c6a5dd71445dcf610f/src/main.cpp#L283
-                    if m := re.search(r'^image .+? has alpha channel ! .+? will output (.+?)$', line, re.M):
-                        alphaOverridePath = m.group(1)
-                    elif m := re.search(r'(\d+[.,]\d+)%', line):
-                        self.progressValue[0] = (i + float(m.group(1).replace(',', '.')) / 100) / (len(files) - 1)
-                    elif m := re.search(r'^.+? -> .+? done$', line, re.M):
-                        self.progressValue[0] = (i + 1) / (len(files) - 1)
-                    # self.outputCallback(line) # Suppress detailed log
+                current_process = p
+                try:
+                    for line in p.stderr:
+                        # 如果输入文件是有alpha通道的图片，但是输出扩展名又是JPG
+                        # Real-ESRGAN会强行给输出的文件名加上PNG的扩展名，导致后续处理找不到文件
+                        # 这里额外加了一个重命名为原来的输出文件名的操作
+                        # https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/blob/37026f49824c5cf84062e7c6a5dd71445dcf610f/src/main.cpp#L283
+                        if m := re.search(r'^image .+? has alpha channel ! .+? will output (.+?)$', line, re.M):
+                            alphaOverridePath = m.group(1)
+                        elif m := re.search(r'(\d+[.,]\d+)%', line):
+                            self.progressValue[0] = (i + float(m.group(1).replace(',', '.')) / 100) / (len(files) - 1)
+                        elif m := re.search(r'^.+? -> .+? done$', line, re.M):
+                            self.progressValue[0] = (i + 1) / (len(files) - 1)
+                        # self.outputCallback(line) # Suppress detailed log
+                finally:
+                    current_process = None
         if p.returncode:
             raise subprocess.CalledProcessError(p.returncode, cmd)
             if i > 0 or inputPath == inputPathPreupscaled or self.removeInput:

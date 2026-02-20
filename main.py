@@ -5,6 +5,7 @@ import itertools
 import locale
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -151,6 +152,7 @@ class REGUIApp(ttk.Frame):
         # 控制是否暂停
         self.pauseEvent = threading.Event()
 
+        self.gpus = self.get_gpu_list()
         self.setupVars()
         self.setupWidgets()
 
@@ -162,6 +164,44 @@ class REGUIApp(ttk.Frame):
             self.writeToOutput(
                 f"Using custom upscaler executable: {self.config['Config'].get('Upscaler')}\nThe executable (and models) may be incompatible with Real-ESRGAN-ncnn-vulkan. Use at your own risk!\n"
             )
+            
+        self.log_configuration()
+
+    def log_configuration(self):
+        self.writeToOutput(f"GPU: {self.varstrGPU.get()}\n")
+        self.writeToOutput(f"Model: {self.varstrModel.get()}\n")
+        if self.varstrInputPath.get():
+             self.writeToOutput(f"Input: {self.varstrInputPath.get()}\n")
+        if self.varstrOutputPath.get():
+             self.writeToOutput(f"Output: {self.varstrOutputPath.get()}\n")
+        self.writeToOutput("-" * 30 + "\n")
+
+    def get_gpu_list(self) -> list[tuple[int, str]]:
+        try:
+            # We must pass dummy inputs so it enters initialization and prints GPU list
+            # But the path shouldn't crash it before printing.
+            cmd = (define.RE_PATH, '-v', '-i', 'x', '-o', 'x')
+            p = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                encoding='utf-8' if os.path.splitext(os.path.split(define.RE_PATH)[1])[0] == 'upscayl-bin' else None,
+            )
+            # Check stderr for lines like "[0 NVIDIA GeForce RTX 3080]"
+            gpus = []
+            seen = set()
+            for line in p.stderr.splitlines():
+                if m := re.search(r"^\[(\d+)\s+(.+?)\]", line.strip()):
+                    idx = int(m.group(1))
+                    name = m.group(2).strip()
+                    if idx not in seen:
+                        gpus.append((idx, f"{idx}: {name}"))
+                        seen.add(idx)
+            gpus.sort(key=lambda x: x[0])
+            return gpus
+        except Exception:
+            return []
 
     def setupVars(self):
         def varstrOutputPathCallback(
@@ -218,6 +258,32 @@ class REGUIApp(ttk.Frame):
         self.varstrOutputFormat = tk.StringVar(value=_fmt)
 
         self.varintGPUID = tk.IntVar(value=self.config["Config"].getint("GPUID"))
+
+        def varstrGPUTraceCallback(*args):
+            s = self.varstrGPU.get()
+            if "Auto" in s:
+                 self.varintGPUID.set(-1)
+            else:
+                 try:
+                      self.varintGPUID.set(int(s.split(":")[0]))
+                 except:
+                      self.varintGPUID.set(-1)
+
+        gpu_strs = [g[1] for g in self.gpus]
+        # Try to find which GPU is selected by ID
+        # Default -1 (auto)
+        current_gpu_id = self.varintGPUID.get()
+        if current_gpu_id == -1:
+             self.varstrGPU = tk.StringVar(value="Auto (-1)")
+        else:
+             matched = [g[1] for g in self.gpus if g[0] == current_gpu_id]
+             if matched:
+                  self.varstrGPU = tk.StringVar(value=matched[0])
+             else:
+                  # ID not found in list (maybe new machine), fallback to Auto or just show ID
+                  self.varstrGPU = tk.StringVar(value=f"{current_gpu_id}")
+        self.varstrGPU.trace_add("write", varstrGPUTraceCallback)
+
         self.varboolUseTTA = tk.BooleanVar(
             value=self.config["Config"].getboolean("UseTTA")
         )
@@ -571,15 +637,20 @@ class REGUIApp(ttk.Frame):
         ttk.Label(
             self.frameAdvancedConfigLeft, textvariable=self.varstrLabelUsedGPUID
         ).pack(padx=10, pady=5, fill=tk.X)
-        self.spinGPUID = ttk.Spinbox(
+        
+        gpu_vals = ["Auto (-1)"] + [g[1] for g in self.gpus]
+        self.comboGPU = ttk.Combobox(
             self.frameAdvancedConfigLeft,
-            from_=-1,
-            to=7,
-            increment=1,
-            width=12,
-            textvariable=self.varintGPUID,
+            state="readonly",
+            values=gpu_vals,
+            textvariable=self.varstrGPU,
         )
-        self.spinGPUID.pack(padx=10, pady=5, fill=tk.X)
+        if not self.comboGPU.get():
+             self.comboGPU.current(0)
+             
+        self.comboGPU.pack(padx=10, pady=5, fill=tk.X)
+        self.comboGPU.bind("<<ComboboxSelected>>", lambda e: e.widget.select_clear())
+
         ttk.Label(
             self.frameAdvancedConfigLeft, textvariable=self.varstrLabelLossyModeQuality
         ).pack(padx=10, pady=5, fill=tk.X)
@@ -1176,6 +1247,8 @@ class REGUIApp(ttk.Frame):
             self.textOutput.config(state=tk.NORMAL)
             self.textOutput.delete(1.0, tk.END)
             self.textOutput.config(state=tk.DISABLED)
+            
+            self.log_configuration()
 
             if sys.platform != "darwin":
                 notification = notifypy.Notify(
@@ -1258,9 +1331,11 @@ class REGUIApp(ttk.Frame):
                     ),
                     self.varboolIgnoreError.get(),
                 ),
+                daemon=True,
             )
             t.start()
         except Exception as ex:
+            print(f"Error in buttonProcess_click: {ex}")
             messagebox.showerror(define.APP_TITLE, traceback.format_exc())
 
     def setInputPath(self, paths: tuple[str, ...]):
@@ -1526,6 +1601,7 @@ if __name__ == "__main__":
     root.protocol(
         "WM_DELETE_WINDOW",
         lambda: (
+            task.kill_process(),
             app.close(),
             root.destroy(),
         ),
