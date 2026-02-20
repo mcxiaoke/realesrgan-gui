@@ -8,6 +8,14 @@ import re
 import sys
 import tempfile
 
+if os.name == "nt":
+    import ctypes
+    try:
+        # fix High DPI (HiDPI) scaling issues in TkinterDnD2
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # 1 = System Aware
+    except Exception:
+        ctypes.windll.user32.SetProcessDPIAware()  # Fallback for older Windows
+
 if sys.platform != 'darwin':
     import notifypy
     # fix: UnsupportedPlatform exception on Windows 11 and Python 3.12 by TransparentLC · Pull Request #55 · ms7m/notify-py
