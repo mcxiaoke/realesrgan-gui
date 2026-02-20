@@ -233,6 +233,7 @@ class REGUIApp(ttk.Frame):
              _fmt = i18n.getTranslatedString("OutputFormatAuto")
         self.varstrOutputFormat = tk.StringVar(value=_fmt)
 
+        self.varintThreadCount = tk.IntVar(value=1)
         self.varintGPUID = tk.IntVar(value=self.config["Config"].getint("GPUID"))
 
         def varstrGPUTraceCallback(*args):
@@ -345,6 +346,10 @@ class REGUIApp(ttk.Frame):
         )
         self.varstrLabelTileSizeAuto = tk.StringVar(
             value=i18n.getTranslatedString("TileSizeAuto")
+        )
+
+        self.varstrLabelThreadCount = tk.StringVar(
+            value=i18n.getTranslatedString("ThreadCount")
         )
         self.varstrLabelUsedGPUID = tk.StringVar(
             value=i18n.getTranslatedString("UsedGPUID")
@@ -623,6 +628,20 @@ class REGUIApp(ttk.Frame):
         )
         self.comboTileSize.current(self.varintTileSizeIndex.get())
         self.comboTileSize.pack(padx=10, pady=5, fill=tk.X)
+        
+        ttk.Label(
+            self.frameAdvancedConfigLeft, textvariable=self.varstrLabelThreadCount
+        ).pack(padx=10, pady=5, fill=tk.X)
+        self.spinThreadCount = ttk.Spinbox(
+            self.frameAdvancedConfigLeft,
+            from_=1,
+            to=16,
+            increment=1,
+            width=12,
+            textvariable=self.varintThreadCount,
+        )
+        self.spinThreadCount.pack(padx=10, pady=5, fill=tk.X)
+        
         ttk.Label(
             self.frameAdvancedConfigLeft, textvariable=self.varstrLabelUsedGPUID
         ).pack(padx=10, pady=5, fill=tk.X)
@@ -884,6 +903,7 @@ class REGUIApp(ttk.Frame):
             "Model": self.varstrModel.get(),
             "DownsampleIndex": self.varintDownsampleIndex.get(),
             "GPUID": self.varintGPUID.get(),
+            "ThreadCount": self.varintThreadCount.get(),
             "TileSizeIndex": self.varintTileSizeIndex.get(),
             "LossyQuality": self.varintLossyQuality.get(),
             "UseWebP": self.varboolUseWebP.get(),
@@ -1295,6 +1315,7 @@ class REGUIApp(ttk.Frame):
 
             def completeCallback(withError: bool):
                 te = time.perf_counter()
+                print(f"[Total Time] Processed in {te - ts:.3f}s with {self.varintThreadCount.get()} threads.")
                 if sys.platform != "darwin":
                     notification.title = i18n.getTranslatedString("ToastCompletedTitle")
                     if withError:
@@ -1347,6 +1368,7 @@ class REGUIApp(ttk.Frame):
                         ),  # TBPF_NOPROGRESS
                     ),
                     self.varboolIgnoreError.get(),
+                    self.varintThreadCount.get(),
                 ),
                 daemon=True,
             )
@@ -1626,7 +1648,7 @@ if __name__ == "__main__":
         ),
     )
 
-    initialSize = (720, 640)
+    initialSize = (1200, 900)
     root.minsize(*initialSize)
     root.geometry(
         "{}x{}+{}+{}".format(

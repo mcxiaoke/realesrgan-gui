@@ -2,6 +2,7 @@ import collections
 import subprocess
 import io
 import math
+import concurrent.futures
 import os
 import re
 import shlex
@@ -18,16 +19,18 @@ from PIL import ImageSequence
 import define
 import param
 
-current_process: subprocess.Popen = None
+current_processes: set[subprocess.Popen] = set()
+process_lock = threading.Lock()
 
 def kill_process():
-    global current_process
-    proc = current_process # Capture reference
-    if proc:
+    with process_lock:
+        procs = list(current_processes)
+        current_processes.clear()
+        
+    for proc in procs:
         try:
             # Force kill immediately to be responsive on close
             if os.name == 'nt':
-                # On Windows, terminate() is roughly equivalent to Kill, but let's be sure
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], 
                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
             else:
@@ -37,8 +40,6 @@ def kill_process():
                 proc.kill()
             except:
                 pass
-        finally:
-            current_process = None
 
 class AbstractTask:
     def __init__(self, outputCallback: typing.Callable[[str], None]) -> None:
@@ -163,7 +164,7 @@ class RESpawnTask(AbstractTask):
                     *(('-x', ) if self.config.useTTA else ()),
                 )
         self.outputCallback(f'Processing {os.path.basename(self.inputPath)}...\n')
-        global current_process
+        print(f'Running command: {shlex.join(cmd)}')
         with subprocess.Popen(
                 cmd,
                 stderr=subprocess.PIPE,
@@ -171,7 +172,8 @@ class RESpawnTask(AbstractTask):
                 encoding='utf-8' if os.path.splitext(os.path.split(define.RE_PATH)[1])[0] == 'upscayl-bin' else None,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
             ) as p:
-                current_process = p
+                with process_lock:
+                    current_processes.add(p)
                 try:
                     for line in p.stderr:
                         # 如果输入文件是有alpha通道的图片，但是输出扩展名又是JPG
@@ -186,7 +188,8 @@ class RESpawnTask(AbstractTask):
                             self.progressValue[0] = (i + 1) / (len(files) - 1)
                         # self.outputCallback(line) # Suppress detailed log
                 finally:
-                    current_process = None
+                    with process_lock:
+                        current_processes.discard(p)
         
         # Check if process was killed intentionally (exit code != 0 but user requested stop)
         # We can detect this if the queue is cleared/empty in main, but we don't have access to main here.
@@ -388,8 +391,14 @@ class CustomCompressTask(AbstractTask):
             encoding='utf-8',
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
         ) as p:
-            for line in p.stderr:
-                self.outputCallback(line)
+            with process_lock:
+                current_processes.add(p)
+            try:
+                for line in p.stderr:
+                    self.outputCallback(line)
+            finally:
+                with process_lock:
+                    current_processes.discard(p)
         if p.returncode:
             raise subprocess.CalledProcessError(p.returncode, cmd)
         if self.removeInput:
@@ -403,31 +412,78 @@ def taskRunner(
     failCallback: typing.Callable[[Exception], None],
     finallyCallback: typing.Callable[[], None],
     ignoreError: bool,
+    threadCount: int = 1,
 ) -> None:
     counter = 0
     withError = False
-    while queue:
-        try:
-            pauseEvent.wait()
-            if not queue:
-                break
-            ts = time.perf_counter()
-            task = queue.popleft()
-            task.run()
-            te = time.perf_counter()
-            outputCallback(f'Success elapsed time: ({round((te - ts) * 1000)}ms).\n')
-            counter += 1
-        except Exception as ex:
-            if not queue and isinstance(ex, subprocess.CalledProcessError):
-                 outputCallback("Task stopped by user.\n")
-                 completeCallback(False) # Treat as success (stopped) or ensure cleanup
-                 finallyCallback()
-                 return
-            withError = True
-            outputCallback(traceback.format_exc())
-            failCallback(ex)
-            if not ignoreError:
-                finallyCallback()
-                return
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threadCount) as executor:
+        futures = set()
+
+        while True:
+            try:
+                pauseEvent.wait()
+                
+                # Check if we should stop (queue empty and no running tasks)
+                if not queue and not futures:
+                    break
+                
+                # Submit tasks up to threadCount
+                while len(futures) < threadCount and queue:
+                    task = queue.popleft()
+                    
+                    def run_wrapper(t):
+                        ts = time.perf_counter()
+                        t.run()
+                        te = time.perf_counter()
+                        return te - ts
+
+                    fut = executor.submit(run_wrapper, task)
+                    futures.add(fut)
+                
+                if not futures:
+                    # Should not match unless queue was empty and we broke above
+                    break
+
+                # Wait for at least one task to complete
+                # We use a small timeout or just wait indefinitely for one?
+                # If we wait indefinitely, we can't check pauseEvent...
+                # Actually pauseEvent is checked at loop start.
+                # If user pauses, we want to stop SUBMITTING, but let running finish.
+                # So waiting on futures is fine.
+                done, not_done = concurrent.futures.wait(
+                    futures, 
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                for fut in done:
+                    futures.remove(fut)
+                    try:
+                        elapsed = fut.result()
+                        outputCallback(f'Success elapsed time: ({round(elapsed * 1000)}ms).\n')
+                        counter += 1
+                    except Exception as ex:
+                        if isinstance(ex, subprocess.CalledProcessError) and not queue and not not_done:
+                             # Likely user stopped
+                             outputCallback("Task stopped by user.\n")
+                        else:
+                             withError = True
+                             outputCallback(traceback.format_exc())
+                             failCallback(ex)
+                             if not ignoreError:
+                                 # Cancel all pending
+                                 for f in not_done: f.cancel()
+                                 # We can't easily stop running threads in Python without killing process
+                                 # But we can stop submitting.
+                                 return # Exit runner
+
+            except Exception as ex:
+                 # General runner error
+                 withError = True
+                 outputCallback(traceback.format_exc())
+                 failCallback(ex)
+                 if not ignoreError:
+                     return
+
     completeCallback(withError)
     finallyCallback()
