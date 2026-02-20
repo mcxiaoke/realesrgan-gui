@@ -177,31 +177,7 @@ class REGUIApp(ttk.Frame):
         self.writeToOutput("-" * 30 + "\n")
 
     def get_gpu_list(self) -> list[tuple[int, str]]:
-        try:
-            # We must pass dummy inputs so it enters initialization and prints GPU list
-            # But the path shouldn't crash it before printing.
-            cmd = (define.RE_PATH, '-v', '-i', 'x', '-o', 'x')
-            p = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-                encoding='utf-8' if os.path.splitext(os.path.split(define.RE_PATH)[1])[0] == 'upscayl-bin' else None,
-            )
-            # Check stderr for lines like "[0 NVIDIA GeForce RTX 3080]"
-            gpus = []
-            seen = set()
-            for line in p.stderr.splitlines():
-                if m := re.search(r"^\[(\d+)\s+(.+?)\]", line.strip()):
-                    idx = int(m.group(1))
-                    name = m.group(2).strip()
-                    if idx not in seen:
-                        gpus.append((idx, f"{idx}: {name}"))
-                        seen.add(idx)
-            gpus.sort(key=lambda x: x[0])
-            return gpus
-        except Exception:
-            return []
+        return [(0, "0: GPU 0"),(1, "1: GPU 1")] # Placeholder 
 
     def setupVars(self):
         def varstrOutputPathCallback(

@@ -404,7 +404,7 @@ def taskRunner(
             ts = time.perf_counter()
             queue.popleft().run()
             te = time.perf_counter()
-            outputCallback(f'Success ({round((te - ts) * 1000)}ms).\n')
+            outputCallback(f'Success elapsed time: ({round((te - ts) * 1000)}ms).\n')
             counter += 1
         except Exception as ex:
             withError = True
