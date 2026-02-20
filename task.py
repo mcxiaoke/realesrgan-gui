@@ -42,7 +42,7 @@ class RESpawnTask(AbstractTask):
         self.removeInput = removeInput
 
     def run(self) -> None:
-        self.outputCallback(f'Using executable: {define.RE_PATH}\n')
+        # self.outputCallback(f'Using executable: {define.RE_PATH}\n')
         self.progressValue[0] = 0
 
         with Image.open(self.inputPath) as img:
@@ -86,7 +86,7 @@ class RESpawnTask(AbstractTask):
             preWidth = math.ceil(dstWidth / (self.config.modelFactor ** intg))
             preHeight = math.ceil(dstHeight / (self.config.modelFactor ** intg))
             if frac < .5 and (srcWidth != preWidth or srcHeight != preHeight):
-                self.outputCallback(f'Pre-upscale from {srcWidth}x{srcHeight} to {preWidth}x{preHeight}.\n')
+                # self.outputCallback(f'Pre-upscale from {srcWidth}x{srcHeight} to {preWidth}x{preHeight}.\n')
                 inputPathPreupscaled = tempfile.mktemp('.webp' if os.path.splitext(self.inputPath)[1] == '.webp' else '.png')
                 with Image.open(self.inputPath) as img:
                     resized = img.resize((preWidth, preHeight), Image.LANCZOS)
@@ -140,7 +140,8 @@ class RESpawnTask(AbstractTask):
                     '-g', 'auto' if self.config.gpuID < 0 else str(self.config.gpuID),
                     *(('-x', ) if self.config.useTTA else ()),
                 )
-            with subprocess.Popen(
+        self.outputCallback(f'Processing {os.path.basename(self.inputPath)}...\n')
+        with subprocess.Popen(
                 cmd,
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
@@ -158,14 +159,14 @@ class RESpawnTask(AbstractTask):
                         self.progressValue[0] = (i + float(m.group(1).replace(',', '.')) / 100) / (len(files) - 1)
                     elif m := re.search(r'^.+? -> .+? done$', line, re.M):
                         self.progressValue[0] = (i + 1) / (len(files) - 1)
-                    self.outputCallback(line)
-            if p.returncode:
-                raise subprocess.CalledProcessError(p.returncode, cmd)
+                    # self.outputCallback(line) # Suppress detailed log
+        if p.returncode:
+            raise subprocess.CalledProcessError(p.returncode, cmd)
             if i > 0 or inputPath == inputPathPreupscaled or self.removeInput:
                 os.remove(inputPath)
             if alphaOverridePath:
                 shutil.move(alphaOverridePath, outputPath)
-                self.outputCallback(f'Rename {alphaOverridePath} to {outputPath}\n')
+                # self.outputCallback(f'Rename {alphaOverridePath} to {outputPath}\n')
 
         os.makedirs(os.path.split(self.outputPath)[0], exist_ok=True)
         if srcWidth == dstWidth and srcHeight == dstHeight:
@@ -174,7 +175,7 @@ class RESpawnTask(AbstractTask):
             shutil.move(files[-1], self.outputPath)
         else:
             with Image.open(files[-1]) as img:
-                self.outputCallback(f'Downsample from {img.size[0]}x{img.size[1]} to {dstWidth}x{dstHeight}.\n')
+                # self.outputCallback(f'Downsample from {img.size[0]}x{img.size[1]} to {dstWidth}x{dstHeight}.\n')
                 resized = img.resize((dstWidth, dstHeight), self.config.downsample)
                 resized.save(self.outputPath)
                 resized.close()
@@ -376,7 +377,7 @@ def taskRunner(
             ts = time.perf_counter()
             queue.popleft().run()
             te = time.perf_counter()
-            outputCallback(f'Task #{counter} completed in {round((te - ts) * 1000)}ms.\n')
+            outputCallback(f'Success ({round((te - ts) * 1000)}ms).\n')
             counter += 1
         except Exception as ex:
             withError = True

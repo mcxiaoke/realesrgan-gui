@@ -212,6 +212,11 @@ class REGUIApp(ttk.Frame):
         self.varintTileSizeIndex = tk.IntVar(
             value=self.config["Config"].getint("TileSizeIndex")
         )
+        _fmt = self.config["Config"].get("OutputFormat", "Auto")
+        if _fmt == "Auto":
+             _fmt = i18n.getTranslatedString("OutputFormatAuto")
+        self.varstrOutputFormat = tk.StringVar(value=_fmt)
+
         self.varintGPUID = tk.IntVar(value=self.config["Config"].getint("GPUID"))
         self.varboolUseTTA = tk.BooleanVar(
             value=self.config["Config"].getboolean("UseTTA")
@@ -247,6 +252,12 @@ class REGUIApp(ttk.Frame):
         )
         self.varstrLabelOutputPath = tk.StringVar(
             value=i18n.getTranslatedString("Output")
+        )
+        self.varstrLabelOutputFormat = tk.StringVar(
+            value=i18n.getTranslatedString("OutputFormat")
+        )
+        self.varstrLabelOutputFormatAuto = tk.StringVar(
+            value=i18n.getTranslatedString("OutputFormatAuto")
         )
         self.varstrLabelOpenFileDialogue = tk.StringVar(
             value=i18n.getTranslatedString("OpenFileDialog")
@@ -400,6 +411,27 @@ class REGUIApp(ttk.Frame):
             self.varstrModel.set(self.models[0])
         self.comboModel.pack(padx=10, pady=5, fill=tk.X)
         self.comboModel.bind("<<ComboboxSelected>>", lambda e: e.widget.select_clear())
+        
+        ttk.Label(self.frameModel, textvariable=self.varstrLabelOutputFormat).pack(
+            padx=10, pady=5, fill=tk.X
+        )
+        self.comboOutputFormat = ttk.Combobox(
+            self.frameModel,
+            state="readonly",
+            values=(
+                self.varstrLabelOutputFormatAuto.get(),
+                "jpg", "png", "webp"
+            ),
+            textvariable=self.varstrOutputFormat,
+        )
+        # Handle "Auto" translation manually if needed, or just store "Auto" in config but display localized
+        # For simplicity, if config says "Auto", we select the first item.
+        if self.varstrOutputFormat.get() == "Auto":
+             self.comboOutputFormat.current(0)
+        
+        self.comboOutputFormat.pack(padx=10, pady=5, fill=tk.X)
+        self.comboOutputFormat.bind("<<ComboboxSelected>>", lambda e: e.widget.select_clear())
+        
         self.frameResize = ttk.Frame(self.frameBasicConfigBottom)
         self.frameResize.grid(row=0, column=0, sticky=tk.NSEW)
         ttk.Label(self.frameResize, textvariable=self.varstrLabelResizeMode).grid(
@@ -569,13 +601,13 @@ class REGUIApp(ttk.Frame):
             self.frameAdvancedConfigLeft, textvariable=self.varstrCustomCommand
         )
         self.entryCustomCommand.pack(padx=10, pady=5, fill=tk.X)
-        self.checkUseWebP = ttk.Checkbutton(
-            self.frameAdvancedConfigRight,
-            textvariable=self.varstrLabelPreferWebP,
-            style="Switch.TCheckbutton",
-            variable=self.varboolUseWebP,
-        )
-        self.checkUseWebP.pack(padx=10, pady=5, fill=tk.X)
+        # self.checkUseWebP = ttk.Checkbutton(
+        #     self.frameAdvancedConfigRight,
+        #     textvariable=self.varstrLabelPreferWebP,
+        #     style="Switch.TCheckbutton",
+        #     variable=self.varboolUseWebP,
+        # )
+        # self.checkUseWebP.pack(padx=10, pady=5, fill=tk.X)
         self.checkUseTTA = ttk.Checkbutton(
             self.frameAdvancedConfigRight,
             textvariable=self.varstrLabelEnableTTA,
@@ -800,6 +832,7 @@ class REGUIApp(ttk.Frame):
             "LossyMode": self.varboolLossyMode.get(),
             "IgnoreError": self.varboolIgnoreError.get(),
             "Preupscale": self.varboolPreupscale.get(),
+            "OutputFormat": "Auto" if self.varstrOutputFormat.get() == self.varstrLabelOutputFormatAuto.get() else self.varstrOutputFormat.get(),
             "CustomCommand": self.varstrCustomCommand.get(),
             "AppLanguage": i18n.current_language,
         }
@@ -816,28 +849,14 @@ class REGUIApp(ttk.Frame):
         return r
 
     def buttonInputPath_click(self):
-        if not (
-            p := filedialog.askopenfilename(
-                filetypes=(
-                    (
-                        "Image files",
-                        (".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff"),
-                    ),
-                ),
-                multiple=True,
-            )
-        ):
+        if not (p := filedialog.askdirectory()):
             return
-        self.setInputPath(p)
+        self.setInputPath((p,))
 
     def buttonOutputPath_click(self):
-        if not (
-            p := filedialog.askopenfilename(
-                filetypes=(("Image files", (".png", ".gif", ".webp")),),
-            )
-        ):
+        if not (p := filedialog.askdirectory()):
             return
-        self.varstrOutputPath.set((p,))
+        self.varstrOutputPath.set(p)
 
     def comboDownsample_click(self, event: tk.Event):
         self.comboDownsample.select_clear()
@@ -939,9 +958,14 @@ class REGUIApp(ttk.Frame):
                                 )
                             elif self.varstrCustomCommand.get().strip():
                                 t = tempfile.mktemp(".png")
-                                g = os.path.splitext(g)[0] + (
-                                    ".webp" if self.varboolUseWebP.get() else ".png"
-                                )
+                                _fmt = self.varstrOutputFormat.get()
+                                if _fmt == self.varstrLabelOutputFormatAuto.get():
+                                    _ext = os.path.splitext(f)[1].lower()
+                                    if _ext not in (".jpg", ".jpeg", ".png", ".webp"):
+                                        _ext = ".png"
+                                else:
+                                    _ext = "." + _fmt.lower()
+                                g = os.path.splitext(g)[0] + _ext
                                 queue.append(
                                     task.RESpawnTask(
                                         self.writeToOutput,
@@ -961,32 +985,69 @@ class REGUIApp(ttk.Frame):
                                     )
                                 )
                             elif self.varboolLossyMode.get():
-                                t = tempfile.mktemp(".webp")
-                                g = os.path.splitext(g)[0] + (
-                                    ".webp" if self.varboolUseWebP.get() else ".jpg"
-                                )
-                                queue.append(
-                                    task.RESpawnTask(
-                                        self.writeToOutput,
-                                        self.progressValue,
-                                        f,
-                                        t,
-                                        initialConfigParams,
+                                # Determine output extension
+                                _fmt = self.varstrOutputFormat.get()
+                                if _fmt == self.varstrLabelOutputFormatAuto.get():
+                                     # Only if lossy mode is active, prevent PNG if auto
+                                     # But user might want to lossy compress a transparent PNG -> WebP?
+                                     # Let's respect "Auto" as input extension, but if input is PNG/TIF, maybe default to JPG/WebP for lossy?
+                                     # Existing behavior was "WebP if UseWebP else JPG" for LossyMode.
+                                     # If I use "Auto", and input is PNG, output PNG with LossyMode effectively does nothing.
+                                     # So if Auto is selected and LossyMode is checked, maybe fallback to JPG/WebP?
+                                     # Or just let user be responsible. If they want lossy, choose JPG/WebP.
+                                     # If they choose Auto and input is PNG, they get lossless PNG.
+                                     _ext = os.path.splitext(f)[1].lower()
+                                else:
+                                     _ext = "." + _fmt.lower()
+                                
+                                # Fallback or adjustment
+                                if _ext not in (".jpg", ".jpeg", ".webp") and self.varboolLossyMode.get():
+                                     # If format is not lossy-compatible but lossy mode enabled, force JPG (unless input had alpha?)
+                                     # But we don't know if input has alpha here easily without opening it.
+                                     # Let's just trust user's selection: if they chose PNG + Lossy, they get PNG (lossless).
+                                     pass
+
+                                if self.varboolLossyMode.get() and _ext in (".jpg", ".jpeg", ".webp"):
+                                    t = tempfile.mktemp(".webp")
+                                    g = os.path.splitext(g)[0] + _ext
+                                    queue.append(
+                                        task.RESpawnTask(
+                                            self.writeToOutput,
+                                            self.progressValue,
+                                            f,
+                                            t,
+                                            initialConfigParams,
+                                        )
                                     )
-                                )
-                                queue.append(
-                                    task.LossyCompressTask(
-                                        self.writeToOutput,
-                                        t,
-                                        g,
-                                        self.varintLossyQuality.get(),
-                                        True,
+                                    queue.append(
+                                        task.LossyCompressTask(
+                                            self.writeToOutput,
+                                            t,
+                                            g,
+                                            self.varintLossyQuality.get(),
+                                            True,
+                                        )
                                     )
-                                )
+                                else:
+                                    g = os.path.splitext(g)[0] + _ext
+                                    queue.append(
+                                        task.RESpawnTask(
+                                            self.writeToOutput,
+                                            self.progressValue,
+                                            f,
+                                            g,
+                                            initialConfigParams,
+                                        )
+                                    )
                             else:
-                                g = os.path.splitext(g)[0] + (
-                                    ".webp" if self.varboolUseWebP.get() else ".png"
-                                )
+                                _fmt = self.varstrOutputFormat.get()
+                                if _fmt == self.varstrLabelOutputFormatAuto.get():
+                                    _ext = os.path.splitext(f)[1].lower()
+                                    if _ext not in (".jpg", ".jpeg", ".png", ".webp"):
+                                        _ext = ".png"
+                                else:
+                                    _ext = "." + _fmt.lower()
+                                g = os.path.splitext(g)[0] + _ext
                                 queue.append(
                                     task.RESpawnTask(
                                         self.writeToOutput,
@@ -1289,32 +1350,18 @@ class REGUIApp(ttk.Frame):
         )
 
     def getOutputPath(self, paths: tuple[str, ...]) -> str:
+        # Simplify output path generation: just append "_output" to input path
         r = []
         for p in paths:
-            if os.path.isdir(p):
-                base, ext = p, ""
-            else:
-                base, ext = os.path.splitext(p)
-                if (
-                    ext.lower() in {".jpg", ".tif", ".tiff"}
-                    or self.varstrCustomCommand.get().strip()
-                ):
-                    ext = ".png"
-                if ext.lower() == ".png" and self.varboolUseWebP.get():
-                    ext = ".webp"
-            suffix = ""
-            match self.varintResizeMode.get():
-                case param.ResizeMode.RATIO:
-                    suffix = f"x{self.varintResizeRatio.get()}"
-                case param.ResizeMode.WIDTH:
-                    suffix = f"w{self.varintResizeWidth.get()}"
-                case param.ResizeMode.HEIGHT:
-                    suffix = f"h{self.varintResizeHeight.get()}"
-                case param.ResizeMode.LONGEST_SIDE:
-                    suffix = f"l{self.varintResizeLongestSide.get()}"
-                case param.ResizeMode.SHORTEST_SIDE:
-                    suffix = f"s{self.varintResizeShortestSide.get()}"
-            r.append(f"{base} ({self.models[self.comboModel.current()]} {suffix}){ext}")
+             # Just append _output to the file/folder name before extension
+             if os.path.isdir(p):
+                 r.append(f"{p}_output")
+             else:
+                 base, ext = os.path.splitext(p)
+                 # We don't change extension here, just base name.
+                 # The processing logic will handle extension based on settings.
+                 r.append(f"{base}_output{ext}")
+
         return " | ".join(r)
 
 
